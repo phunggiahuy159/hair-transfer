@@ -1,0 +1,16 @@
+# Virtual environment
+.venv/
+venv/
+
+# Pretrained weights & generated outputs (downloaded via setup.sh)
+models/
+output/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# OS / editor cruft
+.DS_Store
+*.swp
