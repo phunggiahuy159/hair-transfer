@@ -1,0 +1,36 @@
+# Dependencies for the FLUX.2 [klein] 9B method (Method 2).
+#
+# Install into a SEPARATE virtual environment (.venv-flux) — these versions are
+# intentionally newer than the repo's main requirements.txt and must NOT be mixed
+# with the vendored diffusers 0.23.1 / torch 2.2.2 stack used by Stable-Hair.
+#
+#   python3 -m venv .venv-flux
+#   source .venv-flux/bin/activate
+#   pip install -r flux/requirements-flux.txt
+#
+# CUDA 12 PyTorch wheels (FLUX.2 klein is a bf16 model and wants a modern torch).
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+torch>=2.5.0
+torchvision>=0.20.0
+
+# Flux2KleinPipeline lives in diffusers >= 0.38; transformers must be new enough
+# to provide the Qwen3 / Mistral3 text encoders the pipeline relies on.
+diffusers>=0.38.0
+transformers>=4.49.0
+accelerate>=1.1.0
+safetensors>=0.4.5
+sentencepiece>=0.2.0
+huggingface_hub>=0.26.0
+pillow>=10.3.0
+
+# Worker HTTP server.
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
+pyyaml>=6.0
+requests>=2.31.0
+
+# Optional: 4/8-bit quantization to fit FLUX.2 klein on smaller GPUs.
+# Uncomment and set low_vram / a quantized load path if you need it.
+# bitsandbytes>=0.44.1

@@ -6,9 +6,14 @@
 # stack, and downloads the pretrained Stage-1 / Stage-2 weights.
 #
 # Usage:
-#   ./setup.sh                 # full setup (env + weights)
+#   ./setup.sh                 # full setup (env + weights) for Stable-Hair (Method 1)
 #   ./setup.sh --skip-weights  # only build the environment
 #   ./setup.sh --skip-env      # only download the weights (env must exist)
+#   ./setup.sh --flux          # ALSO set up FLUX.2 klein (Method 2): .venv-flux + weights
+#
+# FLUX.2 [klein] 9B runs in a SEPARATE virtual environment (.venv-flux) with a modern
+# diffusers, because it is incompatible with the vendored diffusers 0.23.1 Stable-Hair
+# uses. It is opt-in via --flux (the model download is large, ~tens of GB).
 #
 # Tested on: Ubuntu, Python 3.10, NVIDIA driver >= 520 (RTX A6000).
 # The wheels are CUDA 11.8 builds; any reasonably recent NVIDIA driver works.
@@ -18,17 +23,23 @@ set -euo pipefail
 cd "$(dirname "$0")"
 REPO_DIR="$(pwd)"
 VENV_DIR="${REPO_DIR}/.venv"
+FLUX_VENV_DIR="${REPO_DIR}/.venv-flux"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 # Google Drive folder published by the authors (contains stage1/ and stage2/).
 DRIVE_URL="https://drive.google.com/drive/folders/1E-8Udfw8S8IorCWhBgS4FajIbqlrWRbQ"
 
+# FLUX.2 klein model repo (kept in sync with configs/flux_klein.yaml).
+FLUX_MODEL_REPO="black-forest-labs/FLUX.2-klein-9B"
+
 SKIP_ENV=0
 SKIP_WEIGHTS=0
+WITH_FLUX=0
 for arg in "$@"; do
   case "$arg" in
     --skip-env)     SKIP_ENV=1 ;;
     --skip-weights) SKIP_WEIGHTS=1 ;;
+    --flux)         WITH_FLUX=1 ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
@@ -164,7 +175,63 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Done
+# 4. FLUX.2 klein (Method 2) — separate venv + weights (opt-in via --flux)
+# ---------------------------------------------------------------------------
+if [ "$WITH_FLUX" -eq 1 ]; then
+  if [ "$SKIP_ENV" -eq 0 ]; then
+    log "Creating FLUX virtual environment at .venv-flux"
+    rm -rf "$FLUX_VENV_DIR"
+    "$PYTHON_BIN" -m venv "$FLUX_VENV_DIR"
+    # shellcheck disable=SC1091
+    source "$FLUX_VENV_DIR/bin/activate"
+
+    log "Upgrading pip / setuptools / wheel (flux env)"
+    python -m pip install --upgrade pip setuptools wheel
+
+    log "Installing FLUX requirements (modern diffusers + CUDA 12 torch — several GB)"
+    python -m pip install -r flux/requirements-flux.txt
+
+    log "Verifying the FLUX install"
+    python - <<'PY'
+import torch, diffusers
+from diffusers import Flux2KleinPipeline  # noqa: F401
+print("torch     :", torch.__version__)
+print("diffusers :", diffusers.__version__)
+print("CUDA available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("GPU       :", torch.cuda.get_device_name(0))
+PY
+    deactivate || true
+  else
+    log "Skipping FLUX environment setup (--skip-env)"
+  fi
+
+  if [ "$SKIP_WEIGHTS" -eq 0 ]; then
+    log "Pre-downloading FLUX.2 klein weights ($FLUX_MODEL_REPO) into the HF cache"
+    [ -d "$FLUX_VENV_DIR" ] && source "$FLUX_VENV_DIR/bin/activate"
+    if ! huggingface-cli download "$FLUX_MODEL_REPO" >/dev/null; then
+      cat >&2 <<EOF
+
+WARNING: FLUX.2 klein download failed. The model may be gated — accept the license
+at https://huggingface.co/$FLUX_MODEL_REPO and log in, then retry:
+
+  source .venv-flux/bin/activate
+  huggingface-cli login
+  huggingface-cli download $FLUX_MODEL_REPO
+
+(Or just let it download on first run of flux/flux_server.py.)
+EOF
+    fi
+    deactivate || true
+  else
+    log "Skipping FLUX weight download (--skip-weights)"
+  fi
+else
+  log "Skipping FLUX.2 klein setup (pass --flux to enable Method 2)"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Done
 # ---------------------------------------------------------------------------
 log "Setup complete"
 cat <<EOF
@@ -177,4 +244,9 @@ Activate the environment and run inference:
 
 The base Stable Diffusion 1.5 weights download automatically from Hugging Face
 on first run (repo: stable-diffusion-v1-5/stable-diffusion-v1-5).
+
+For the FLUX.2 klein method (Method 2), start its worker in the other venv first
+(or use ./start_demo.sh which launches both):
+
+  .venv-flux/bin/python flux/flux_server.py   # serves on http://127.0.0.1:8987
 EOF

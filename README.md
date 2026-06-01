@@ -22,6 +22,24 @@ try-on. It is a **two-stage pipeline**:
 
 <img src='assets/method.jpg'>
 
+## Methods
+This fork offers **two** hair-transfer methods, both available from the same Gradio
+demo via a method selector:
+
+- **Method 1 — Stable-Hair** (default): the two-stage SD1.5 pipeline above. Tuned
+  parameters via sliders; works best on aligned 512×512 faces. Runs in `.venv`.
+- **Method 2 — FLUX.2 [klein] 9B**: a prompt-driven editor. You give it the ID image,
+  the hair-reference image, and a short text instruction, and it edits the hairstyle
+  in one shot — no bald conversion, no ControlNet. Runs in a **separate** environment
+  (`.venv-flux`) and is served by `flux/flux_server.py`.
+
+> **Why two environments?** FLUX.2 klein needs a modern `diffusers` (≥ 0.38,
+> `Flux2KleinPipeline`) and a bf16 torch that are incompatible with the vendored
+> `diffusers 0.23.1` Stable-Hair imports. A single Python process can't hold both, so
+> the FLUX method runs as its own worker and the Gradio app talks to it over local HTTP.
+> FLUX.2 klein needs roughly **13 GB of VRAM** in bf16 (set `low_vram: true` in
+> `configs/flux_klein.yaml` to enable CPU offload on smaller cards).
+
 ## Requirements
 - **OS:** Linux (tested on Ubuntu 22.04)
 - **Python:** 3.10+
@@ -37,9 +55,10 @@ system + Python dependency, and downloads the pretrained weights into `models/`.
 git clone <this-repo> hair-transfer
 cd hair-transfer
 
-./setup.sh                   # full setup: .venv + pretrained weights
+./setup.sh                   # full setup: .venv + pretrained weights (Method 1)
 # ./setup.sh --skip-weights  # build the environment only
 # ./setup.sh --skip-env      # download the weights only
+# ./setup.sh --flux          # ALSO set up Method 2: .venv-flux + FLUX.2 klein weights
 
 source .venv/bin/activate
 python infer_full.py         # writes ./output/0.jpg
@@ -86,10 +105,29 @@ python infer_full.py
 The result (source · bald · reference · transferred) is written to `./output/`.
 
 ### Gradio demo
-An interactive web UI:
+An interactive web UI with a **method selector** (Stable-Hair / FLUX.2 klein):
+
 ```bash
-python gradio_demo_full.py    # serves on http://0.0.0.0:8986
+# Method 1 only (Stable-Hair):
+python gradio_demo_full.py            # serves on http://0.0.0.0:8986
+
+# Both methods — start the FLUX worker first, then the app (or use the launcher):
+./start_demo.sh                       # starts the FLUX worker + the Gradio app
 ```
+
+To run the two processes by hand instead of `start_demo.sh`:
+```bash
+# Terminal 1 — FLUX.2 klein worker (loads the 9B model, ~13 GB VRAM):
+.venv-flux/bin/python flux/flux_server.py     # http://127.0.0.1:8987
+
+# Terminal 2 — Gradio app:
+.venv/bin/python gradio_demo_full.py          # http://0.0.0.0:8986
+```
+
+In the UI, pick **FLUX.2 klein**, upload the ID image + reference hair, optionally edit
+the text prompt, and click **Run**. The model/prompt/steps defaults live in
+[`configs/flux_klein.yaml`](configs/flux_klein.yaml). If the worker isn't running, the
+FLUX method shows a message telling you to start it (Stable-Hair still works regardless).
 
 ### Training
 The two stages are trained separately. Adjust the data paths and the accelerate
@@ -101,15 +139,19 @@ bash train_stage2.sh   # Hair Extractor + Latent IdentityNet
 
 ## Project structure
 ```
-configs/             inference config (hair_transfer.yaml)
-diffusers/           vendored, lightly-modified diffusers 0.23.1 (used at runtime)
+configs/             inference configs (hair_transfer.yaml, flux_klein.yaml)
+diffusers/           vendored, lightly-modified diffusers 0.23.1 (used by Method 1)
 ref_encoder/         Hair Extractor, Latent ControlNet, adapters, attention
 utils/               StableHair pipelines (transfer + bald conversion)
+flux/                Method 2: FLUX.2 klein worker + its requirements
+  flux_server.py       FastAPI worker (runs in .venv-flux)
+  requirements-flux.txt
 test_imgs/           sample ID / reference images
-infer_full.py        end-to-end inference entry point
-gradio_demo_full.py  Gradio web demo
+infer_full.py        end-to-end inference entry point (Method 1)
+gradio_demo_full.py  Gradio web demo (method selector: Stable-Hair / FLUX.2 klein)
 train_stage{1,2}.py  training scripts
-setup.sh             environment + weights installer
+setup.sh             environment + weights installer (--flux for Method 2)
+start_demo.sh        launches the FLUX worker + the Gradio app together
 ```
 
 ## What changed in this fork
@@ -125,6 +167,9 @@ The upstream repo no longer runs out of the box; this fork fixes:
   `diffusers/` package the model code actually imports.
 - **One-command setup.** Added `setup.sh` (system deps, venv, weight download with
   a manual-download fallback) and refreshed this README.
+- **Second method — FLUX.2 klein.** Added a prompt-driven hair-transfer method
+  (`flux/`, `configs/flux_klein.yaml`, `start_demo.sh`) selectable from the Gradio
+  demo, running in its own `.venv-flux` to avoid clashing with the vendored diffusers.
 
 ## Limitations
 Results depend on the first stage — if the bald converter struggles, transfer
