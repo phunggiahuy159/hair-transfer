@@ -1,92 +1,112 @@
-# Stable-Hair: Real-World Hair Transfer via Diffusion Model
+# Hair Transfer
 
-<a href='https://xiaojiu-z.github.io/Stable-Hair.github.io/'><img src='https://img.shields.io/badge/Project-Page-green'></a>
-<a href='https://arxiv.org/pdf/2407.14078'><img src='https://img.shields.io/badge/Technique-Report-red'></a>
+A virtual hair try-on toolkit that transfers a hairstyle from a **reference image**
+onto a **person's face** — with **three** interchangeable methods you can compare side
+by side from a single Gradio app.
 
-*[Yuxuan Zhang](https://scholar.google.com/citations?user=f2VoRWYAAAAJ&hl=en), Qing Zhang, [Yiren Song](https://scholar.google.com/citations?user=L2YS0jgAAAAJ&hl=en), [Jichao Zhang](https://zhangqianhui.github.io/), [Hao Tang](https://scholar.google.com/citations?user=9zJkeEMAAAAJ&hl=en), [Jiaming Liu](https://scholar.google.com/citations?user=SmL7oMQAAAAJ&hl=en)*
+<a href='https://arxiv.org/pdf/2407.14078'><img src='https://img.shields.io/badge/Stable--Hair-Report-red'></a>
+<a href='https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev'><img src='https://img.shields.io/badge/FLUX.1-Kontext-blue'></a>
+<a href='https://huggingface.co/facebook/sam3'><img src='https://img.shields.io/badge/Meta-SAM3-orange'></a>
 
 <img src='assets/teaser_.jpg'>
 
-> This is a maintained fork of the [official Stable-Hair repo](https://github.com/Xiaojiu-z/Stable-Hair), updated to run on a modern machine. See [What changed](#what-changed-in-this-fork) for details.
+## Why three methods?
+Hair transfer can be approached very differently depending on the tradeoff you want
+between **identity preservation**, **fidelity to the reference hairstyle**, and
+**hardware**. This project bundles a classic trained ControlNet pipeline and two modern
+diffusion-editing approaches so you can pick — or compare — the right tool for a given image.
 
-## Abstract
-Stable-Hair is a diffusion-based hair transfer framework that robustly transfers a
-wide range of real-world hairstyles onto user-provided faces for virtual hair
-try-on. It is a **two-stage pipeline**:
+| Method | Model | How it works | Best for | VRAM | Env |
+|---|---|---|---|---|---|
+| **1 · Stable-Hair** | SD 1.5 (trained) | Bald-converter ControlNet → Hair Extractor + Latent IdentityNet | Aligned 512×512 faces; no gated downloads | ~8 GB | `.venv` |
+| **2 · FLUX Kontext** | FLUX.1-Kontext-dev | ID + reference edited together by a prompt, result cropped back | Quick, prompt-steerable transfers | ~24 GB | `.venv-flux` |
+| **3 · SAM3 + Kontext** | SAM3 + FLUX.1-Kontext-dev | SAM3 masks the hair, Kontext repaints only that region from the reference | Surgical edits that keep face/background intact | ~24 GB | `.venv-flux` |
 
-1. **Stage 1 — Bald Converter:** a Latent ControlNet trained alongside Stable
-   Diffusion removes hair from the source face, producing a bald image.
-2. **Stage 2 — Hair Transfer:** a *Hair Extractor* encodes the reference
-   hairstyle while a *Latent IdentityNet* preserves identity and background,
-   transferring the target hairstyle with high fidelity onto the bald image.
+All three are selectable from one web UI ([`gradio_demo_full.py`](gradio_demo_full.py)).
+
+## Methods in detail
+
+### Method 1 — Stable-Hair (two-stage SD 1.5)
+A diffusion-based framework that robustly transfers real-world hairstyles onto a face.
+It is a two-stage pipeline:
+
+1. **Bald Converter** — a Latent ControlNet trained alongside Stable Diffusion removes
+   hair from the source face, producing a bald image.
+2. **Hair Transfer** — a *Hair Extractor* encodes the reference hairstyle while a
+   *Latent IdentityNet* preserves identity and background, transferring the target
+   hairstyle with high fidelity onto the bald image.
+
+It is tuned via sliders in the UI and works best on cropped, aligned 512×512 faces. Based
+on [Stable-Hair](https://github.com/Xiaojiu-z/Stable-Hair) (see [Credits](#credits)).
 
 <img src='assets/method.jpg'>
 
-## Methods
-This fork offers **three** hair-transfer methods, all available from the same Gradio
-demo via a method selector:
+### Method 2 — FLUX Kontext (prompt-driven edit)
+The ID image and the hair-reference are placed side by side and
+[`FluxKontextPipeline`](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev) edits
+the canvas to give the ID the reference's hairstyle; the result is cropped back to the
+person. No bald conversion, no ControlNet — just two images and a text instruction.
 
-- **Method 1 — Stable-Hair** (default): the two-stage SD1.5 pipeline above. Tuned
-  parameters via sliders; works best on aligned 512×512 faces. Runs in `.venv`.
-- **Method 2 — FLUX Kontext**: a prompt-driven editor. The ID image and the hair-reference
-  are placed side by side, [`FluxKontextPipeline`](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev)
-  ([FLUX.1-Kontext-dev](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev)) edits
-  the canvas to give the ID the reference's hairstyle, and the result is cropped back to the
-  person. No bald conversion, no ControlNet.
-- **Method 3 — SAM3 + FLUX.1-Kontext inpainting**: the most surgical option. [SAM3](https://huggingface.co/facebook/sam3)
-  open-vocabulary segmentation finds the hair on the source image (text prompt, e.g.
-  `"hair"`), then [`FluxKontextInpaintPipeline`](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev)
-  repaints **only** that masked region using the reference image's hairstyle, leaving the
-  rest of the face and background untouched. The Gradio app shows the SAM3 mask alongside
-  the result.
+### Method 3 — SAM3 + FLUX.1-Kontext (segment-then-inpaint)
+The most surgical option. [SAM3](https://huggingface.co/facebook/sam3) open-vocabulary
+segmentation finds the hair on the source image (text prompt, e.g. `"hair"`), then
+[`FluxKontextInpaintPipeline`](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev)
+repaints **only** that masked region using the reference image's hairstyle, leaving the
+rest of the face and background untouched. The UI shows the SAM3 mask alongside the result.
 
-> **One model for both FLUX methods.** Methods 2 and 3 both use **FLUX.1-Kontext-dev** and
-> are served by a single worker (`flux/kontext_server.py`) that loads the model **once** and
-> shares it between the edit and inpaint pipelines (`from_pipe`). SAM3 (Method 3 only) is
-> loaded lazily, so Method 2 works with just Kontext.
->
-> **Why a separate environment?** Kontext needs a modern `diffusers` (≥ 0.38) and a bf16
-> torch that are incompatible with the vendored `diffusers 0.23.1` Stable-Hair imports — a
-> single Python process can't hold both. So the FLUX methods run as a worker in `.venv-flux`
-> and the Gradio app talks to it over local HTTP.
->
-> **VRAM:** FLUX.1-Kontext ≈ **24 GB** bf16 (SAM3 is small). Set `low_vram: true` in
-> [`configs/kontext.yaml`](configs/kontext.yaml) to enable CPU offload on smaller cards.
->
-> **Gated models:** `black-forest-labs/FLUX.1-Kontext-dev` and `facebook/sam3` require
-> accepting their license on Hugging Face and `huggingface-cli login`.
+> **One model for Methods 2 & 3.** Both use **FLUX.1-Kontext-dev**, served by a single
+> worker ([`flux/kontext_server.py`](flux/kontext_server.py)) that loads the model **once**
+> and shares it between the edit and inpaint pipelines (`from_pipe`). SAM3 (Method 3 only)
+> is loaded lazily, so Method 2 works with just Kontext.
+
+## Architecture
+Method 1 imports a **vendored `diffusers 0.23.1`** that the model code depends on; the FLUX
+methods need a **modern `diffusers` (≥ 0.38)** and a bf16 torch. A single Python process
+can't hold both, so they live in separate virtual environments and communicate over local
+HTTP:
+
+```
+.venv      ── gradio_demo_full.py ── Method 1 (Stable-Hair, in-process)
+                   │  HTTP
+                   └─▶ flux/kontext_server.py (:8987) ── Methods 2 & 3
+.venv-flux ── the Kontext worker (FLUX.1-Kontext-dev, loaded once; SAM3 lazy)
+```
+
+If the worker isn't running, the Kontext methods show a "start the worker" message;
+Method 1 always works in-process.
 
 ## Requirements
 - **OS:** Linux (tested on Ubuntu 22.04)
 - **Python:** 3.10+
-- **GPU:** NVIDIA GPU with ≥ 8 GB VRAM and driver ≥ 520 (tested on an RTX A6000)
-- **CUDA:** the pinned wheels are CUDA 11.8 builds; any recent driver works
-- **Disk:** ~15 GB (≈6 GB pretrained weights + ≈4 GB base SD1.5 + environment)
+- **GPU:** NVIDIA GPU + driver ≥ 520. Method 1 runs on ≥ 8 GB; the FLUX methods want
+  ~24 GB bf16 (set `low_vram: true` in [`configs/kontext.yaml`](configs/kontext.yaml) for
+  CPU offload on smaller cards).
+- **Disk:** ~15 GB for Method 1 (weights + base SD1.5 + env); the FLUX.1-Kontext and SAM3
+  weights add tens of GB more.
+- **Gated models:** `black-forest-labs/FLUX.1-Kontext-dev` and `facebook/sam3` require
+  accepting their license on Hugging Face and `huggingface-cli login`.
 
-## Quick Start
-The included [`setup.sh`](setup.sh) creates a virtual environment, installs every
-system + Python dependency, and downloads the pretrained weights into `models/`.
+## Installation
+[`setup.sh`](setup.sh) builds the environment(s), installs dependencies, and downloads
+weights.
 
 ```bash
 git clone <this-repo> hair-transfer
 cd hair-transfer
 
-./setup.sh                       # full setup: .venv + pretrained weights (Method 1)
-# ./setup.sh --skip-weights      # build the environment only
-# ./setup.sh --skip-env          # download the weights only
-# ./setup.sh --flux              # ALSO set up Methods 2 & 3: .venv-flux + FLUX.1-Kontext weights
-# ./setup.sh --flux --sam-inpaint  # ...and add SAM3 (enables Method 3's segmentation)
-
-source .venv/bin/activate
-python infer_full.py         # writes ./output/0.jpg
+./setup.sh                         # Method 1: .venv + Stable-Hair weights
+# ./setup.sh --skip-weights        # build the environment only
+# ./setup.sh --skip-env            # download the weights only
+# ./setup.sh --flux                # + Methods 2 & 3: .venv-flux + FLUX.1-Kontext
+# ./setup.sh --flux --sam-inpaint  # + SAM3 (enables Method 3's segmentation)
 ```
 
 The base **Stable Diffusion 1.5** checkpoint
-(`stable-diffusion-v1-5/stable-diffusion-v1-5`) is fetched from Hugging Face
-automatically on first run.
+(`stable-diffusion-v1-5/stable-diffusion-v1-5`) is fetched from Hugging Face automatically
+on first run of Method 1.
 
-### Manual setup
-If you prefer to set things up by hand:
+<details>
+<summary>Manual setup (Method 1)</summary>
 
 ```bash
 # System libraries (Debian/Ubuntu): venv, a C++ toolchain + CMake for dlib,
@@ -96,8 +116,9 @@ sudo apt-get install -y python3.10-venv build-essential cmake libgl1 libglib2.0-
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt   # the cu118 --extra-index-url is baked into the file
 ```
+</details>
 
-### Pretrained weights
+### Stable-Hair weights
 Download from [Google Drive](https://drive.google.com/drive/folders/1E-8Udfw8S8IorCWhBgS4FajIbqlrWRbQ?usp=drive_link)
 (or just run `./setup.sh`) and arrange them as:
 
@@ -113,47 +134,44 @@ models/
 
 ## Usage
 
-### Inference
-Edit the source/reference images and parameters in
-[`configs/hair_transfer.yaml`](configs/hair_transfer.yaml), then:
-```bash
-python infer_full.py
-```
-The result (source · bald · reference · transferred) is written to `./output/`.
-
-### Gradio demo
-An interactive web UI with a **method selector** (Stable-Hair / FLUX Kontext / SAM3 + Inpaint):
+### Web demo (all three methods)
+An interactive Gradio UI with a method selector:
 
 ```bash
 # Method 1 only (Stable-Hair):
-python gradio_demo_full.py            # serves on http://0.0.0.0:8986
+python gradio_demo_full.py            # http://0.0.0.0:8986
 
-# With the FLUX worker — the launcher starts it, then the app:
-./start_demo.sh                       # FLUX.1-Kontext worker (8987) + Gradio app
+# With the FLUX methods — the launcher starts the worker, then the app:
+./start_demo.sh                       # FLUX.1-Kontext worker (:8987) + Gradio app
 ```
 
-To run the processes by hand instead of `start_demo.sh`:
+Run the processes by hand instead of `start_demo.sh`:
 ```bash
-# Terminal 1 — the single Kontext worker (serves Methods 2 & 3, ~24 GB VRAM):
+# Terminal 1 — the Kontext worker (serves Methods 2 & 3):
 .venv-flux/bin/python flux/kontext_server.py       # http://127.0.0.1:8987
-
 # Terminal 2 — Gradio app:
 .venv/bin/python gradio_demo_full.py               # http://0.0.0.0:8986
 ```
 
-In the UI (both Kontext methods talk to the same worker; defaults in
-[`configs/kontext.yaml`](configs/kontext.yaml)):
-- **FLUX Kontext** — upload ID + reference hair, optionally edit the prompt, **Run**.
-- **SAM3 + Inpaint** — upload source + reference hair, set the **mask prompt** (what to
-  segment, default `hair`) and optionally the edit prompt, **Run**. The SAM3 mask appears
-  in the first output, the inpainted result in the second.
+In the UI, upload an **ID image** and a **reference hair** image, pick a method, and **Run**:
+- **Stable-Hair** — tune the sliders; outputs the bald intermediate + the transfer.
+- **FLUX Kontext** — optionally edit the prompt.
+- **SAM3 + Inpaint** — set the **mask prompt** (what to segment, default `hair`) and
+  optionally the edit prompt; the SAM3 mask appears in the first output, the result in the
+  second.
 
-If the worker isn't running, the Kontext methods show a message telling you to start it;
-Stable-Hair always works in-process.
+Defaults for the FLUX methods live in [`configs/kontext.yaml`](configs/kontext.yaml).
 
-### Training
-The two stages are trained separately. Adjust the data paths and the accelerate
-config ([`default_config.yaml`](default_config.yaml)) for your setup, then:
+### Command-line inference (Method 1)
+Edit the source/reference images and parameters in
+[`configs/hair_transfer.yaml`](configs/hair_transfer.yaml), then:
+```bash
+python infer_full.py     # writes source · bald · reference · transferred to ./output/
+```
+
+### Training (Method 1)
+The two stages are trained separately. Adjust the data paths and the accelerate config
+([`default_config.yaml`](default_config.yaml)), then:
 ```bash
 bash train_stage1.sh   # Bald Converter
 bash train_stage2.sh   # Hair Extractor + Latent IdentityNet
@@ -166,42 +184,37 @@ diffusers/           vendored, lightly-modified diffusers 0.23.1 (used by Method
 ref_encoder/         Hair Extractor, Latent ControlNet, adapters, attention
 utils/               StableHair pipelines (transfer + bald conversion)
 flux/                Methods 2 & 3 worker + requirements (run in .venv-flux)
-  kontext_server.py         shared FLUX.1-Kontext worker (/transfer + /inpaint_transfer)
-  requirements-flux.txt     FLUX.1-Kontext stack
-  requirements-sam-inpaint.txt  adds SAM3 (Method 3)
+  kontext_server.py            shared FLUX.1-Kontext worker (/transfer + /inpaint_transfer)
+  requirements-flux.txt        FLUX.1-Kontext stack
+  requirements-sam-inpaint.txt adds SAM3 (Method 3)
 test_imgs/           sample ID / reference images
-infer_full.py        end-to-end inference entry point (Method 1)
-gradio_demo_full.py  Gradio web demo (selector: Stable-Hair / FLUX Kontext / SAM3 + Inpaint)
-train_stage{1,2}.py  training scripts
+infer_full.py        command-line inference (Method 1)
+gradio_demo_full.py  web demo (selector: Stable-Hair / FLUX Kontext / SAM3 + Inpaint)
+train_stage{1,2}.py  Stable-Hair training scripts
 setup.sh             installer (--flux for Methods 2 & 3, --sam-inpaint adds SAM3)
 start_demo.sh        launches the Kontext worker + the Gradio app together
 ```
 
-## What changed in this fork
-The upstream repo no longer runs out of the box; this fork fixes:
+## Notes & limitations
+- **Method 1** depends on its first stage — if the bald converter struggles, transfer
+  quality drops. The released model was trained on a small, FFHQ-aligned dataset
+  (≈6k images for stage 1, ≈20k for stage 2), so it works best on cropped, aligned 512×512
+  faces.
+- **Method 2** relies on FLUX.1-Kontext preserving the side-by-side layout so the result
+  can be cropped back to the person; misframed outputs are the place to revisit the crop.
+- The vendored `diffusers 0.23.1` (Method 1) and the modern stack (Methods 2 & 3) are kept
+  in separate environments on purpose — don't mix them.
 
-- **Dead base model.** `runwayml/stable-diffusion-v1-5` was removed from Hugging
-  Face. Configs and training scripts now point at the maintained mirror
-  `stable-diffusion-v1-5/stable-diffusion-v1-5`.
-- **Dependency pins.** `torchvision` is corrected to `0.17.2+cu118` (it must match
-  `torch 2.2.2`), and a `--extra-index-url` for the PyTorch CUDA 11.8 wheels is
-  baked into `requirements.txt` so a plain `pip install -r requirements.txt` works.
-- **diffusers version.** The pin is aligned to `0.23.1` to match the vendored
-  `diffusers/` package the model code actually imports.
-- **One-command setup.** Added `setup.sh` (system deps, venv, weight download with
-  a manual-download fallback) and refreshed this README.
-- **Two more methods via FLUX.1-Kontext.** Added a prompt-driven editor (Method 2) and a
-  SAM3-segment-then-inpaint method (Method 3), both selectable from the Gradio demo and
-  both served by a single worker (`flux/kontext_server.py`, `configs/kontext.yaml`) that
-  loads **FLUX.1-Kontext-dev once** and shares it (`from_pipe`). Runs in its own
-  `.venv-flux` to avoid clashing with the vendored diffusers. `./setup.sh --flux`
-  installs Kontext; `--sam-inpaint` adds SAM3 for Method 3.
-
-## Limitations
-Results depend on the first stage — if the bald converter struggles, transfer
-quality drops. The released model was trained on a relatively small, FFHQ-aligned
-dataset (≈6k images for stage 1, ≈20k for stage 2), so it works best on cropped,
-aligned, 512×512 face images.
+## Credits
+- **Stable-Hair** (Method 1) — *Stable-Hair: Real-World Hair Transfer via Diffusion Model*
+  by Yuxuan Zhang, Qing Zhang, Yiren Song, Jichao Zhang, Hao Tang, Jiaming Liu.
+  [Project page](https://xiaojiu-z.github.io/Stable-Hair.github.io/) ·
+  [Paper](https://arxiv.org/pdf/2407.14078) ·
+  [Original repo](https://github.com/Xiaojiu-z/Stable-Hair). Method 1 here is a maintained
+  fork updated to run on a modern machine (dead base-model mirror fixed, dependency/diffusers
+  pins corrected, one-command `setup.sh`).
+- **FLUX.1-Kontext** (Methods 2 & 3) — [Black Forest Labs](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev).
+- **SAM 3** (Method 3) — [Meta AI](https://huggingface.co/facebook/sam3).
 
 ## Citation
 ```bibtex
@@ -218,3 +231,4 @@ aligned, 512×512 face images.
 
 ## License
 See [LICENSE](LICENSE).
+</content>
