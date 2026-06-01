@@ -5,7 +5,9 @@ import numpy as np
 from PIL import Image
 from omegaconf import OmegaConf
 import os
+import io
 import cv2
+import requests
 from diffusers import DDIMScheduler, UniPCMultistepScheduler
 from diffusers.models import UNet2DConditionModel
 from ref_encoder.latent_controlnet import ControlNetModel
@@ -117,11 +119,23 @@ class StableHair:
         return image
 
 
-model = StableHair(config="./configs/hair_transfer.yaml", weight_dtype=torch.float32)
+# ---------------------------------------------------------------------------
+# Method 1: Stable-Hair (the original two-stage SD1.5 pipeline).
+# The model is loaded lazily so the app still launches when only the FLUX
+# method is used (and vice-versa).
+# ---------------------------------------------------------------------------
+_stable_hair_model = None
 
-# Define your ML model or function here
+
+def get_stable_hair():
+    global _stable_hair_model
+    if _stable_hair_model is None:
+        _stable_hair_model = StableHair(config="./configs/hair_transfer.yaml", weight_dtype=torch.float32)
+    return _stable_hair_model
+
+
 def model_call(id_image, ref_hair, converter_scale, scale, guidance_scale, controlnet_conditioning_scale):
-    # # Your ML logic goes here
+    model = get_stable_hair()
     id_image = Image.fromarray(id_image.astype('uint8'), 'RGB')
     ref_hair = Image.fromarray(ref_hair.astype('uint8'), 'RGB')
     id_image = id_image.resize((512, 512))
@@ -143,23 +157,108 @@ def model_call(id_image, ref_hair, converter_scale, scale, guidance_scale, contr
     image = Image.fromarray((image * 255.).astype(np.uint8))
     return id_image_bald, image
 
-# Create a Gradio interface
-image1 = gr.inputs.Image(label="id_image")
-image2 = gr.inputs.Image(label="ref_hair")
-number0 = gr.inputs.Slider(minimum=0.5, maximum=1.5, default=1, label="Converter Scale")
-number1 = gr.inputs.Slider(minimum=0.0, maximum=3, default=1.0, label="Hair Encoder Scale")
-number2 = gr.inputs.Slider(minimum=1.1, maximum=3.0, default=1.5, label="CFG")
-number3 = gr.inputs.Slider(minimum=0.1, maximum=2.0, default=1, label="Latent IdentityNet Scale")
-output1 = gr.outputs.Image(type="pil", label="Bald_Result")
-output2 = gr.outputs.Image(type="pil", label="Transfer Result")
 
-iface = gr.Interface(
-    fn=lambda id_image, ref_hair, num0, num1, num2, num3, : model_call(id_image, ref_hair, num0, num1, num2, num3),
-    inputs=[image1, image2, number0, number1, number2, number3],
-    outputs=[output1, output2],
-    title="Hair Transfer Demo",
-    description="In general, aligned faces work well, but can also be used on non-aligned faces, and you need to resize to 512 * 512"
-)
+# ---------------------------------------------------------------------------
+# Method 2: FLUX.2 [klein] 9B — prompt-driven editing.
+# This runs in a separate venv (.venv-flux) served by flux/flux_server.py; we
+# reach it over local HTTP. Just send the two images + a text prompt.
+# ---------------------------------------------------------------------------
+FLUX_CONFIG = OmegaConf.load("./configs/flux_klein.yaml")
+FLUX_URL = f"http://{FLUX_CONFIG.server.host}:{FLUX_CONFIG.server.port}"
+
+
+def flux_transfer(id_image, ref_hair, prompt):
+    id_pil = Image.fromarray(id_image.astype('uint8'), 'RGB')
+    ref_pil = Image.fromarray(ref_hair.astype('uint8'), 'RGB')
+    buf1, buf2 = io.BytesIO(), io.BytesIO()
+    id_pil.save(buf1, format="PNG")
+    ref_pil.save(buf2, format="PNG")
+    buf1.seek(0)
+    buf2.seek(0)
+
+    files = {
+        "image1": ("id.png", buf1, "image/png"),
+        "image2": ("ref.png", buf2, "image/png"),
+    }
+    data = {"prompt": prompt or FLUX_CONFIG.default_prompt}
+    try:
+        resp = requests.post(f"{FLUX_URL}/transfer", files=files, data=data, timeout=600)
+    except requests.exceptions.RequestException:
+        raise gr.Error(
+            f"Could not reach the FLUX.2 klein worker at {FLUX_URL}. "
+            "Start it first:  .venv-flux python flux/flux_server.py  (see README)."
+        )
+    if resp.status_code != 200:
+        raise gr.Error(f"FLUX worker error ({resp.status_code}): {resp.text[:200]}")
+    return Image.open(io.BytesIO(resp.content)).convert("RGB")
+
+
+# ---------------------------------------------------------------------------
+# Dispatch + UI
+# ---------------------------------------------------------------------------
+def run(method, id_image, ref_hair, prompt,
+        converter_scale, scale, guidance_scale, controlnet_conditioning_scale):
+    if id_image is None or ref_hair is None:
+        raise gr.Error("Please provide both an ID image and a reference hair image.")
+    if method == "Stable-Hair":
+        bald, result = model_call(id_image, ref_hair, converter_scale, scale,
+                                  guidance_scale, controlnet_conditioning_scale)
+        return bald, result
+    # FLUX.2 klein
+    result = flux_transfer(id_image, ref_hair, prompt)
+    return None, result
+
+
+def _on_method_change(method):
+    is_sh = method == "Stable-Hair"
+    # Stable-Hair shows the sliders + bald output; FLUX shows the prompt box.
+    return (
+        gr.update(visible=not is_sh),  # prompt
+        gr.update(visible=is_sh),      # stable-hair sliders group
+        gr.update(visible=is_sh),      # bald output
+    )
+
+
+with gr.Blocks(title="Hair Transfer Demo") as iface:
+    gr.Markdown(
+        "# Hair Transfer Demo\n"
+        "Two methods: **Stable-Hair** (two-stage SD1.5 pipeline) and "
+        "**FLUX.2 klein** (prompt-driven, just give it the two images + a text instruction).\n\n"
+        "Aligned 512×512 faces work best for Stable-Hair. The FLUX method needs its "
+        "worker running (see README)."
+    )
+    method = gr.Radio(["Stable-Hair", "FLUX.2 klein"], value="Stable-Hair", label="Method")
+
+    with gr.Row():
+        id_image = gr.Image(label="ID image (the person)")
+        ref_hair = gr.Image(label="Reference hair")
+
+    prompt = gr.Textbox(
+        label="Prompt (FLUX.2 klein)",
+        value=FLUX_CONFIG.default_prompt,
+        lines=2,
+        visible=False,
+    )
+
+    with gr.Group(visible=True) as sh_controls:
+        converter_scale = gr.Slider(minimum=0.5, maximum=1.5, value=1, label="Converter Scale")
+        scale = gr.Slider(minimum=0.0, maximum=3, value=1.0, label="Hair Encoder Scale")
+        guidance_scale = gr.Slider(minimum=1.1, maximum=3.0, value=1.5, label="CFG")
+        controlnet_conditioning_scale = gr.Slider(minimum=0.1, maximum=2.0, value=1, label="Latent IdentityNet Scale")
+
+    run_btn = gr.Button("Run", variant="primary")
+
+    with gr.Row():
+        output_bald = gr.Image(type="pil", label="Bald_Result")
+        output_transfer = gr.Image(type="pil", label="Transfer Result")
+
+    method.change(_on_method_change, inputs=method, outputs=[prompt, sh_controls, output_bald])
+    run_btn.click(
+        run,
+        inputs=[method, id_image, ref_hair, prompt,
+                converter_scale, scale, guidance_scale, controlnet_conditioning_scale],
+        outputs=[output_bald, output_transfer],
+    )
 
 # Launch the Gradio interface
 iface.queue().launch(server_name='0.0.0.0', server_port=8986)
