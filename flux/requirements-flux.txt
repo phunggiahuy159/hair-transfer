@@ -1,4 +1,4 @@
-# Dependencies for the FLUX.2 [klein] 9B method (Method 2).
+# Dependencies for the FLUX.1-Kontext methods (Method 2 + Method 3).
 #
 # Install into a SEPARATE virtual environment (.venv-flux) — these versions are
 # intentionally newer than the repo's main requirements.txt and must NOT be mixed
@@ -8,19 +8,22 @@
 #   source .venv-flux/bin/activate
 #   pip install -r flux/requirements-flux.txt
 #
-# CUDA 12 PyTorch wheels (FLUX.2 klein is a bf16 model and wants a modern torch).
+# (Method 3 additionally needs flux/requirements-sam-inpaint.txt for SAM3.)
+#
+# CUDA 12 PyTorch wheels (FLUX.1-Kontext is a bf16 model and wants a modern torch).
 --extra-index-url https://download.pytorch.org/whl/cu121
 
 torch>=2.5.0
 torchvision>=0.20.0
 
-# Flux2KleinPipeline lives in diffusers >= 0.38; transformers must be new enough
-# to provide the Qwen3 / Mistral3 text encoders the pipeline relies on.
+# FluxKontextPipeline / FluxKontextInpaintPipeline live in recent diffusers.
 diffusers>=0.38.0
 transformers>=4.49.0
 accelerate>=1.1.0
 safetensors>=0.4.5
+# T5 tokenizer for FLUX needs sentencepiece + protobuf.
 sentencepiece>=0.2.0
+protobuf>=4.25.0
 huggingface_hub>=0.26.0
 pillow>=10.3.0
 
@@ -31,6 +34,6 @@ python-multipart>=0.0.9
 pyyaml>=6.0
 requests>=2.31.0
 
-# Optional: 4/8-bit quantization to fit FLUX.2 klein on smaller GPUs.
-# Uncomment and set low_vram / a quantized load path if you need it.
+# Optional: 4/8-bit quantization to fit FLUX.1-Kontext-dev on smaller GPUs.
+# Uncomment and set low_vram in configs/kontext.yaml if you need it.
 # bitsandbytes>=0.44.1

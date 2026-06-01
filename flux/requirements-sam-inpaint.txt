@@ -1,0 +1,17 @@
+# Extra dependency for Method 3 — adds SAM3 segmentation on top of the FLUX env.
+#
+# Method 3 (SAM3 hair mask + FLUX.1-Kontext reference inpainting) shares the same
+# FLUX.1-Kontext model and worker as Method 2; this file only adds the SAM3 bits.
+# Install ON TOP OF .venv-flux, AFTER flux/requirements-flux.txt:
+#
+#   source .venv-flux/bin/activate
+#   pip install -r flux/requirements-sam-inpaint.txt
+#
+# facebook/sam3 is GATED on Hugging Face: accept the license, then `huggingface-cli login`.
+
+# SAM3 ships as transformers-native Sam3Model / Sam3Processor. This needs a transformers
+# newer than flux/requirements-flux.txt pins; newer stays compatible with FLUX.1-Kontext.
+transformers>=4.57.0
+
+# cv2 is used to dilate the SAM3 mask before inpainting.
+opencv-python-headless>=4.9.0

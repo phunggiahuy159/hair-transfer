@@ -9,11 +9,17 @@
 #   ./setup.sh                 # full setup (env + weights) for Stable-Hair (Method 1)
 #   ./setup.sh --skip-weights  # only build the environment
 #   ./setup.sh --skip-env      # only download the weights (env must exist)
-#   ./setup.sh --flux          # ALSO set up FLUX.2 klein (Method 2): .venv-flux + weights
+#   ./setup.sh --flux          # ALSO set up FLUX.1-Kontext (Method 2): .venv-flux + weights
+#   ./setup.sh --sam-inpaint   # ALSO set up SAM3 for Method 3 (segment-then-inpaint); needs --flux
 #
-# FLUX.2 [klein] 9B runs in a SEPARATE virtual environment (.venv-flux) with a modern
+# FLUX.1-Kontext runs in a SEPARATE virtual environment (.venv-flux) with a modern
 # diffusers, because it is incompatible with the vendored diffusers 0.23.1 Stable-Hair
 # uses. It is opt-in via --flux (the model download is large, ~tens of GB).
+#
+# Methods 2 (prompt-driven edit) and 3 (SAM3 hair mask + reference inpaint) share ONE
+# FLUX.1-Kontext-dev model — --flux installs it; --sam-inpaint only adds SAM3 (for Method 3).
+# Both facebook/sam3 and black-forest-labs/FLUX.1-Kontext-dev are GATED on Hugging Face:
+# accept their licenses and run `huggingface-cli login` first.
 #
 # Tested on: Ubuntu, Python 3.10, NVIDIA driver >= 520 (RTX A6000).
 # The wheels are CUDA 11.8 builds; any reasonably recent NVIDIA driver works.
@@ -29,17 +35,20 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 # Google Drive folder published by the authors (contains stage1/ and stage2/).
 DRIVE_URL="https://drive.google.com/drive/folders/1E-8Udfw8S8IorCWhBgS4FajIbqlrWRbQ"
 
-# FLUX.2 klein model repo (kept in sync with configs/flux_klein.yaml).
-FLUX_MODEL_REPO="black-forest-labs/FLUX.2-klein-9B"
+# FLUX model repos (kept in sync with configs/kontext.yaml). Methods 2 & 3 share Kontext.
+KONTEXT_REPO="black-forest-labs/FLUX.1-Kontext-dev"
+SAM3_REPO="facebook/sam3"
 
 SKIP_ENV=0
 SKIP_WEIGHTS=0
 WITH_FLUX=0
+WITH_SAM_INPAINT=0
 for arg in "$@"; do
   case "$arg" in
     --skip-env)     SKIP_ENV=1 ;;
     --skip-weights) SKIP_WEIGHTS=1 ;;
     --flux)         WITH_FLUX=1 ;;
+    --sam-inpaint)  WITH_SAM_INPAINT=1 ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
@@ -175,7 +184,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. FLUX.2 klein (Method 2) — separate venv + weights (opt-in via --flux)
+# 4. FLUX.1-Kontext (Methods 2 & 3) — separate venv + weights (opt-in via --flux)
 # ---------------------------------------------------------------------------
 if [ "$WITH_FLUX" -eq 1 ]; then
   if [ "$SKIP_ENV" -eq 0 ]; then
@@ -194,7 +203,7 @@ if [ "$WITH_FLUX" -eq 1 ]; then
     log "Verifying the FLUX install"
     python - <<'PY'
 import torch, diffusers
-from diffusers import Flux2KleinPipeline  # noqa: F401
+from diffusers import FluxKontextPipeline, FluxKontextInpaintPipeline  # noqa: F401
 print("torch     :", torch.__version__)
 print("diffusers :", diffusers.__version__)
 print("CUDA available:", torch.cuda.is_available())
@@ -207,19 +216,19 @@ PY
   fi
 
   if [ "$SKIP_WEIGHTS" -eq 0 ]; then
-    log "Pre-downloading FLUX.2 klein weights ($FLUX_MODEL_REPO) into the HF cache"
+    log "Pre-downloading FLUX.1-Kontext weights ($KONTEXT_REPO) into the HF cache"
     [ -d "$FLUX_VENV_DIR" ] && source "$FLUX_VENV_DIR/bin/activate"
-    if ! huggingface-cli download "$FLUX_MODEL_REPO" >/dev/null; then
+    if ! huggingface-cli download "$KONTEXT_REPO" >/dev/null; then
       cat >&2 <<EOF
 
-WARNING: FLUX.2 klein download failed. The model may be gated — accept the license
-at https://huggingface.co/$FLUX_MODEL_REPO and log in, then retry:
+WARNING: FLUX.1-Kontext download failed. The model is gated — accept the license
+at https://huggingface.co/$KONTEXT_REPO and log in, then retry:
 
   source .venv-flux/bin/activate
   huggingface-cli login
-  huggingface-cli download $FLUX_MODEL_REPO
+  huggingface-cli download $KONTEXT_REPO
 
-(Or just let it download on first run of flux/flux_server.py.)
+(Or just let it download on first run of flux/kontext_server.py.)
 EOF
     fi
     deactivate || true
@@ -227,7 +236,57 @@ EOF
     log "Skipping FLUX weight download (--skip-weights)"
   fi
 else
-  log "Skipping FLUX.2 klein setup (pass --flux to enable Method 2)"
+  log "Skipping FLUX.1-Kontext setup (pass --flux to enable Methods 2 & 3)"
+fi
+
+# ---------------------------------------------------------------------------
+# 4b. SAM3 for Method 3 — adds segmentation on top of .venv-flux (opt-in via --sam-inpaint)
+# ---------------------------------------------------------------------------
+if [ "$WITH_SAM_INPAINT" -eq 1 ]; then
+  if [ ! -d "$FLUX_VENV_DIR" ]; then
+    echo "ERROR: --sam-inpaint reuses .venv-flux, which does not exist. Run with --flux first." >&2
+    exit 1
+  fi
+
+  if [ "$SKIP_ENV" -eq 0 ]; then
+    log "Installing SAM3 requirements into .venv-flux"
+    # shellcheck disable=SC1091
+    source "$FLUX_VENV_DIR/bin/activate"
+    python -m pip install -r flux/requirements-sam-inpaint.txt
+
+    log "Verifying the SAM3 install"
+    python - <<'PY'
+import transformers
+from transformers import Sam3Model  # noqa: F401
+print("transformers :", transformers.__version__)
+PY
+    deactivate || true
+  else
+    log "Skipping SAM3 environment setup (--skip-env)"
+  fi
+
+  if [ "$SKIP_WEIGHTS" -eq 0 ]; then
+    log "Pre-downloading SAM3 weights ($SAM3_REPO)"
+    [ -d "$FLUX_VENV_DIR" ] && source "$FLUX_VENV_DIR/bin/activate"
+    if ! huggingface-cli download "$SAM3_REPO" >/dev/null; then
+      cat >&2 <<EOF
+
+WARNING: download of $SAM3_REPO failed. This model is gated — accept the license at
+https://huggingface.co/$SAM3_REPO and log in, then retry:
+
+  source .venv-flux/bin/activate
+  huggingface-cli login
+  huggingface-cli download $SAM3_REPO
+
+(Or just let it download on first inpaint request to flux/kontext_server.py.)
+EOF
+    fi
+    deactivate || true
+  else
+    log "Skipping SAM3 weight download (--skip-weights)"
+  fi
+else
+  log "Skipping SAM3 setup (pass --sam-inpaint to enable Method 3)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -245,8 +304,10 @@ Activate the environment and run inference:
 The base Stable Diffusion 1.5 weights download automatically from Hugging Face
 on first run (repo: stable-diffusion-v1-5/stable-diffusion-v1-5).
 
-For the FLUX.2 klein method (Method 2), start its worker in the other venv first
-(or use ./start_demo.sh which launches both):
+For the Kontext methods (Method 2 prompt-edit + Method 3 SAM3 inpaint), start the
+single shared worker in the other venv (or use ./start_demo.sh which launches it):
 
-  .venv-flux/bin/python flux/flux_server.py   # serves on http://127.0.0.1:8987
+  .venv-flux/bin/python flux/kontext_server.py       # http://127.0.0.1:8987
+
+It loads FLUX.1-Kontext-dev once and serves both methods (SAM3 loads lazily for Method 3).
 EOF

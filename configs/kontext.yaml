@@ -1,0 +1,35 @@
+# Configuration for the merged FLUX.1-Kontext worker (Methods 2 & 3).
+#
+# A single worker (flux/kontext_server.py, run in .venv-flux) loads FLUX.1-Kontext-dev
+# ONCE and serves both methods, sharing the model weights via from_pipe:
+#   - Method 2 "FLUX Kontext" : /transfer        (prompt-driven edit, 2 images concatenated)
+#   - Method 3 "SAM3 + Inpaint": /inpaint_transfer (SAM3 hair mask + reference inpaint)
+#
+# Both facebook/sam3 and black-forest-labs/FLUX.1-Kontext-dev are GATED on Hugging Face:
+# accept their licenses and run `huggingface-cli login` before first use. SAM3 is only
+# needed for Method 3 and is loaded lazily — Method 2 works with just Kontext.
+
+kontext_repo: "black-forest-labs/FLUX.1-Kontext-dev"
+sam3_repo: "facebook/sam3"
+
+# Shared generation defaults.
+size: 1024
+num_inference_steps: 28
+guidance_scale: 2.5
+low_vram: false              # enable_model_cpu_offload() on the shared pipeline
+
+# --- Method 2: prompt-driven edit (ID + reference placed side by side, result cropped) ---
+edit_prompt: "The image shows two people side by side. Give the person on the LEFT the exact hairstyle, hair colour, length and texture of the person on the RIGHT. Keep the LEFT person's face, identity, skin tone and background unchanged, and keep the same side-by-side layout."
+
+# --- Method 3: SAM3 hair mask + FLUX.1-Kontext reference inpainting ---
+mask_prompt: "hair"
+inpaint_prompt: "Replace the hair in the masked region with the hairstyle from the reference image. Match its colour, length and texture, and blend naturally with the head and lighting."
+strength: 1.0
+mask_blur: 12                # blur_factor for pipe.mask_processor.blur (smoother seams)
+mask_dilate: 8               # grow the SAM3 mask by N px first (0 = off)
+score_threshold: 0.5         # SAM3 instance score threshold
+mask_threshold: 0.5          # SAM3 mask binarization threshold
+
+server:
+  host: "127.0.0.1"
+  port: 8987

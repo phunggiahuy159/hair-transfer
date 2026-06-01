@@ -23,22 +23,38 @@ try-on. It is a **two-stage pipeline**:
 <img src='assets/method.jpg'>
 
 ## Methods
-This fork offers **two** hair-transfer methods, both available from the same Gradio
+This fork offers **three** hair-transfer methods, all available from the same Gradio
 demo via a method selector:
 
 - **Method 1 — Stable-Hair** (default): the two-stage SD1.5 pipeline above. Tuned
   parameters via sliders; works best on aligned 512×512 faces. Runs in `.venv`.
-- **Method 2 — FLUX.2 [klein] 9B**: a prompt-driven editor. You give it the ID image,
-  the hair-reference image, and a short text instruction, and it edits the hairstyle
-  in one shot — no bald conversion, no ControlNet. Runs in a **separate** environment
-  (`.venv-flux`) and is served by `flux/flux_server.py`.
+- **Method 2 — FLUX Kontext**: a prompt-driven editor. The ID image and the hair-reference
+  are placed side by side, [`FluxKontextPipeline`](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev)
+  ([FLUX.1-Kontext-dev](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev)) edits
+  the canvas to give the ID the reference's hairstyle, and the result is cropped back to the
+  person. No bald conversion, no ControlNet.
+- **Method 3 — SAM3 + FLUX.1-Kontext inpainting**: the most surgical option. [SAM3](https://huggingface.co/facebook/sam3)
+  open-vocabulary segmentation finds the hair on the source image (text prompt, e.g.
+  `"hair"`), then [`FluxKontextInpaintPipeline`](https://huggingface.co/black-forest-labs/FLUX.1-Kontext-dev)
+  repaints **only** that masked region using the reference image's hairstyle, leaving the
+  rest of the face and background untouched. The Gradio app shows the SAM3 mask alongside
+  the result.
 
-> **Why two environments?** FLUX.2 klein needs a modern `diffusers` (≥ 0.38,
-> `Flux2KleinPipeline`) and a bf16 torch that are incompatible with the vendored
-> `diffusers 0.23.1` Stable-Hair imports. A single Python process can't hold both, so
-> the FLUX method runs as its own worker and the Gradio app talks to it over local HTTP.
-> FLUX.2 klein needs roughly **13 GB of VRAM** in bf16 (set `low_vram: true` in
-> `configs/flux_klein.yaml` to enable CPU offload on smaller cards).
+> **One model for both FLUX methods.** Methods 2 and 3 both use **FLUX.1-Kontext-dev** and
+> are served by a single worker (`flux/kontext_server.py`) that loads the model **once** and
+> shares it between the edit and inpaint pipelines (`from_pipe`). SAM3 (Method 3 only) is
+> loaded lazily, so Method 2 works with just Kontext.
+>
+> **Why a separate environment?** Kontext needs a modern `diffusers` (≥ 0.38) and a bf16
+> torch that are incompatible with the vendored `diffusers 0.23.1` Stable-Hair imports — a
+> single Python process can't hold both. So the FLUX methods run as a worker in `.venv-flux`
+> and the Gradio app talks to it over local HTTP.
+>
+> **VRAM:** FLUX.1-Kontext ≈ **24 GB** bf16 (SAM3 is small). Set `low_vram: true` in
+> [`configs/kontext.yaml`](configs/kontext.yaml) to enable CPU offload on smaller cards.
+>
+> **Gated models:** `black-forest-labs/FLUX.1-Kontext-dev` and `facebook/sam3` require
+> accepting their license on Hugging Face and `huggingface-cli login`.
 
 ## Requirements
 - **OS:** Linux (tested on Ubuntu 22.04)
@@ -55,10 +71,11 @@ system + Python dependency, and downloads the pretrained weights into `models/`.
 git clone <this-repo> hair-transfer
 cd hair-transfer
 
-./setup.sh                   # full setup: .venv + pretrained weights (Method 1)
-# ./setup.sh --skip-weights  # build the environment only
-# ./setup.sh --skip-env      # download the weights only
-# ./setup.sh --flux          # ALSO set up Method 2: .venv-flux + FLUX.2 klein weights
+./setup.sh                       # full setup: .venv + pretrained weights (Method 1)
+# ./setup.sh --skip-weights      # build the environment only
+# ./setup.sh --skip-env          # download the weights only
+# ./setup.sh --flux              # ALSO set up Methods 2 & 3: .venv-flux + FLUX.1-Kontext weights
+# ./setup.sh --flux --sam-inpaint  # ...and add SAM3 (enables Method 3's segmentation)
 
 source .venv/bin/activate
 python infer_full.py         # writes ./output/0.jpg
@@ -105,29 +122,34 @@ python infer_full.py
 The result (source · bald · reference · transferred) is written to `./output/`.
 
 ### Gradio demo
-An interactive web UI with a **method selector** (Stable-Hair / FLUX.2 klein):
+An interactive web UI with a **method selector** (Stable-Hair / FLUX Kontext / SAM3 + Inpaint):
 
 ```bash
 # Method 1 only (Stable-Hair):
 python gradio_demo_full.py            # serves on http://0.0.0.0:8986
 
-# Both methods — start the FLUX worker first, then the app (or use the launcher):
-./start_demo.sh                       # starts the FLUX worker + the Gradio app
+# With the FLUX worker — the launcher starts it, then the app:
+./start_demo.sh                       # FLUX.1-Kontext worker (8987) + Gradio app
 ```
 
-To run the two processes by hand instead of `start_demo.sh`:
+To run the processes by hand instead of `start_demo.sh`:
 ```bash
-# Terminal 1 — FLUX.2 klein worker (loads the 9B model, ~13 GB VRAM):
-.venv-flux/bin/python flux/flux_server.py     # http://127.0.0.1:8987
+# Terminal 1 — the single Kontext worker (serves Methods 2 & 3, ~24 GB VRAM):
+.venv-flux/bin/python flux/kontext_server.py       # http://127.0.0.1:8987
 
 # Terminal 2 — Gradio app:
-.venv/bin/python gradio_demo_full.py          # http://0.0.0.0:8986
+.venv/bin/python gradio_demo_full.py               # http://0.0.0.0:8986
 ```
 
-In the UI, pick **FLUX.2 klein**, upload the ID image + reference hair, optionally edit
-the text prompt, and click **Run**. The model/prompt/steps defaults live in
-[`configs/flux_klein.yaml`](configs/flux_klein.yaml). If the worker isn't running, the
-FLUX method shows a message telling you to start it (Stable-Hair still works regardless).
+In the UI (both Kontext methods talk to the same worker; defaults in
+[`configs/kontext.yaml`](configs/kontext.yaml)):
+- **FLUX Kontext** — upload ID + reference hair, optionally edit the prompt, **Run**.
+- **SAM3 + Inpaint** — upload source + reference hair, set the **mask prompt** (what to
+  segment, default `hair`) and optionally the edit prompt, **Run**. The SAM3 mask appears
+  in the first output, the inpainted result in the second.
+
+If the worker isn't running, the Kontext methods show a message telling you to start it;
+Stable-Hair always works in-process.
 
 ### Training
 The two stages are trained separately. Adjust the data paths and the accelerate
@@ -139,19 +161,20 @@ bash train_stage2.sh   # Hair Extractor + Latent IdentityNet
 
 ## Project structure
 ```
-configs/             inference configs (hair_transfer.yaml, flux_klein.yaml)
+configs/             inference configs (hair_transfer.yaml, kontext.yaml)
 diffusers/           vendored, lightly-modified diffusers 0.23.1 (used by Method 1)
 ref_encoder/         Hair Extractor, Latent ControlNet, adapters, attention
 utils/               StableHair pipelines (transfer + bald conversion)
-flux/                Method 2: FLUX.2 klein worker + its requirements
-  flux_server.py       FastAPI worker (runs in .venv-flux)
-  requirements-flux.txt
+flux/                Methods 2 & 3 worker + requirements (run in .venv-flux)
+  kontext_server.py         shared FLUX.1-Kontext worker (/transfer + /inpaint_transfer)
+  requirements-flux.txt     FLUX.1-Kontext stack
+  requirements-sam-inpaint.txt  adds SAM3 (Method 3)
 test_imgs/           sample ID / reference images
 infer_full.py        end-to-end inference entry point (Method 1)
-gradio_demo_full.py  Gradio web demo (method selector: Stable-Hair / FLUX.2 klein)
+gradio_demo_full.py  Gradio web demo (selector: Stable-Hair / FLUX Kontext / SAM3 + Inpaint)
 train_stage{1,2}.py  training scripts
-setup.sh             environment + weights installer (--flux for Method 2)
-start_demo.sh        launches the FLUX worker + the Gradio app together
+setup.sh             installer (--flux for Methods 2 & 3, --sam-inpaint adds SAM3)
+start_demo.sh        launches the Kontext worker + the Gradio app together
 ```
 
 ## What changed in this fork
@@ -167,9 +190,12 @@ The upstream repo no longer runs out of the box; this fork fixes:
   `diffusers/` package the model code actually imports.
 - **One-command setup.** Added `setup.sh` (system deps, venv, weight download with
   a manual-download fallback) and refreshed this README.
-- **Second method — FLUX.2 klein.** Added a prompt-driven hair-transfer method
-  (`flux/`, `configs/flux_klein.yaml`, `start_demo.sh`) selectable from the Gradio
-  demo, running in its own `.venv-flux` to avoid clashing with the vendored diffusers.
+- **Two more methods via FLUX.1-Kontext.** Added a prompt-driven editor (Method 2) and a
+  SAM3-segment-then-inpaint method (Method 3), both selectable from the Gradio demo and
+  both served by a single worker (`flux/kontext_server.py`, `configs/kontext.yaml`) that
+  loads **FLUX.1-Kontext-dev once** and shares it (`from_pipe`). Runs in its own
+  `.venv-flux` to avoid clashing with the vendored diffusers. `./setup.sh --flux`
+  installs Kontext; `--sam-inpaint` adds SAM3 for Method 3.
 
 ## Limitations
 Results depend on the first stage — if the bald converter struggles, transfer
