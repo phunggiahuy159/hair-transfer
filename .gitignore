@@ -1,9 +1,12 @@
 # Virtual environment
 .venv/
+.venv-flux/
 venv/
 
-# Pretrained weights & generated outputs (downloaded via setup.sh)
-models/
+# Pretrained weights & generated outputs (downloaded via setup.sh).
+# Anchored to the repo root so it does NOT also match the vendored
+# diffusers/models/ subpackage (which must be committed for Method 1).
+/models/
 output/
 
 # Python caches

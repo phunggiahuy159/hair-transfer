@@ -43,19 +43,37 @@ SKIP_ENV=0
 SKIP_WEIGHTS=0
 WITH_FLUX=0
 WITH_SAM_INPAINT=0
+FORCE=0
 for arg in "$@"; do
   case "$arg" in
     --skip-env)     SKIP_ENV=1 ;;
     --skip-weights) SKIP_WEIGHTS=1 ;;
     --flux)         WITH_FLUX=1 ;;
     --sam-inpaint)  WITH_SAM_INPAINT=1 ;;
+    --force)        FORCE=1 ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
 
+# An existing venv is reused unless --force is given. This makes adding an
+# environment (e.g. ./setup.sh --flux after a Method-1-only install) additive
+# instead of wiping and rebuilding the venv you already have — which is unsafe
+# if something is running out of it.
+venv_healthy() { [ -x "$1/bin/python" ] && "$1/bin/python" -c "$2" >/dev/null 2>&1; }
+
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+
+# Use sudo only when present and we're not already root (root containers often
+# have neither sudo installed nor a need for it).
+if [ "$(id -u)" -eq 0 ]; then
+  SUDO=""
+elif command -v sudo >/dev/null 2>&1; then
+  SUDO="sudo"
+else
+  SUDO=""
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Sanity checks
@@ -81,8 +99,8 @@ if [ "$SKIP_ENV" -eq 0 ]; then
   # dlib wheel, and the shared libs OpenCV needs at runtime (libGL / libglib).
   PYVER="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
   if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update -qq
-    sudo apt-get install -y \
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y \
       "python${PYVER}-venv" python3-pip \
       build-essential cmake \
       libgl1 libglib2.0-0 ffmpeg \
@@ -92,18 +110,24 @@ if [ "$SKIP_ENV" -eq 0 ]; then
     echo "         libGL/libglib are installed for your distro."
   fi
 
-  log "Creating virtual environment at .venv"
-  rm -rf "$VENV_DIR"
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
-  # shellcheck disable=SC1091
-  source "$VENV_DIR/bin/activate"
+  if [ "$FORCE" -eq 0 ] && venv_healthy "$VENV_DIR" "import torch, diffusers, peft, gradio"; then
+    log "Reusing existing .venv (pass --force to rebuild)"
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate"
+  else
+    log "Creating virtual environment at .venv"
+    rm -rf "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate"
 
-  log "Upgrading pip / setuptools / wheel"
-  python -m pip install --upgrade pip setuptools wheel
+    log "Upgrading pip / setuptools / wheel"
+    python -m pip install --upgrade pip setuptools wheel
 
-  log "Installing requirements (this pulls the CUDA 11.8 torch stack — a few GB)"
-  # requirements.txt carries the pytorch cu118 --extra-index-url on its first line.
-  python -m pip install -r requirements.txt
+    log "Installing requirements (this pulls the CUDA 11.8 torch stack — a few GB)"
+    # requirements.txt carries the pytorch cu118 --extra-index-url on its first line.
+    python -m pip install -r requirements.txt
+  fi
 
   log "Verifying the install"
   python - <<'PY'
@@ -188,17 +212,23 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$WITH_FLUX" -eq 1 ]; then
   if [ "$SKIP_ENV" -eq 0 ]; then
-    log "Creating FLUX virtual environment at .venv-flux"
-    rm -rf "$FLUX_VENV_DIR"
-    "$PYTHON_BIN" -m venv "$FLUX_VENV_DIR"
-    # shellcheck disable=SC1091
-    source "$FLUX_VENV_DIR/bin/activate"
+    if [ "$FORCE" -eq 0 ] && venv_healthy "$FLUX_VENV_DIR" "from diffusers import FluxKontextPipeline, FluxKontextInpaintPipeline"; then
+      log "Reusing existing .venv-flux (pass --force to rebuild)"
+      # shellcheck disable=SC1091
+      source "$FLUX_VENV_DIR/bin/activate"
+    else
+      log "Creating FLUX virtual environment at .venv-flux"
+      rm -rf "$FLUX_VENV_DIR"
+      "$PYTHON_BIN" -m venv "$FLUX_VENV_DIR"
+      # shellcheck disable=SC1091
+      source "$FLUX_VENV_DIR/bin/activate"
 
-    log "Upgrading pip / setuptools / wheel (flux env)"
-    python -m pip install --upgrade pip setuptools wheel
+      log "Upgrading pip / setuptools / wheel (flux env)"
+      python -m pip install --upgrade pip setuptools wheel
 
-    log "Installing FLUX requirements (modern diffusers + CUDA 12 torch — several GB)"
-    python -m pip install -r flux/requirements-flux.txt
+      log "Installing FLUX requirements (modern diffusers + CUDA 12 torch — several GB)"
+      python -m pip install -r flux/requirements-flux.txt
+    fi
 
     log "Verifying the FLUX install"
     python - <<'PY'
