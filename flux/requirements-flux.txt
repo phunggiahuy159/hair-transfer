@@ -10,11 +10,15 @@
 #
 # (Method 3 additionally needs flux/requirements-sam-inpaint.txt for SAM3.)
 #
-# CUDA 12 PyTorch wheels (FLUX.1-Kontext is a bf16 model and wants a modern torch).
---extra-index-url https://download.pytorch.org/whl/cu121
+# CUDA 12.4 PyTorch wheels, pinned with a +cu124 LOCAL version so pip fetches the
+# CUDA-12 build from the index below. Do NOT relax this to `torch>=2.5` with only an
+# --extra-index-url: pip then prefers the default PyPI wheel, which (as of torch 2.7+)
+# bundles CUDA 13 and fails on any driver older than ~CUDA 13 with
+# "The NVIDIA driver on your system is too old". cu124 works on driver >= 525.
+--extra-index-url https://download.pytorch.org/whl/cu124
 
-torch>=2.5.0
-torchvision>=0.20.0
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
 
 # FluxKontextPipeline / FluxKontextInpaintPipeline live in recent diffusers.
 diffusers>=0.38.0

@@ -19,7 +19,7 @@
 # Methods 2 (prompt-driven edit) and 3 (SAM3 hair mask + reference inpaint) share ONE
 # FLUX.1-Kontext-dev model — --flux installs it; --sam-inpaint only adds SAM3 (for Method 3).
 # Both facebook/sam3 and black-forest-labs/FLUX.1-Kontext-dev are GATED on Hugging Face:
-# accept their licenses and run `huggingface-cli login` first.
+# accept their licenses and run `hf auth login` first (older huggingface_hub: `huggingface-cli login`).
 #
 # Tested on: Ubuntu, Python 3.10, NVIDIA driver >= 520 (RTX A6000).
 # The wheels are CUDA 11.8 builds; any reasonably recent NVIDIA driver works.
@@ -62,6 +62,17 @@ done
 # instead of wiping and rebuilding the venv you already have — which is unsafe
 # if something is running out of it.
 venv_healthy() { [ -x "$1/bin/python" ] && "$1/bin/python" -c "$2" >/dev/null 2>&1; }
+
+# Resolve the Hugging Face CLI at call time: huggingface_hub >= 1.0 ships `hf`
+# and has REMOVED `huggingface-cli`; older versions only have `huggingface-cli`.
+# Evaluated after the relevant venv is activated, so PATH points at the right one.
+hf_cli() {
+  if command -v hf >/dev/null 2>&1; then
+    hf "$@"
+  else
+    huggingface-cli "$@"
+  fi
+}
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
@@ -248,15 +259,15 @@ PY
   if [ "$SKIP_WEIGHTS" -eq 0 ]; then
     log "Pre-downloading FLUX.1-Kontext weights ($KONTEXT_REPO) into the HF cache"
     [ -d "$FLUX_VENV_DIR" ] && source "$FLUX_VENV_DIR/bin/activate"
-    if ! huggingface-cli download "$KONTEXT_REPO" >/dev/null; then
+    if ! hf_cli download "$KONTEXT_REPO" >/dev/null; then
       cat >&2 <<EOF
 
 WARNING: FLUX.1-Kontext download failed. The model is gated — accept the license
 at https://huggingface.co/$KONTEXT_REPO and log in, then retry:
 
   source .venv-flux/bin/activate
-  huggingface-cli login
-  huggingface-cli download $KONTEXT_REPO
+  hf auth login          # older huggingface_hub: huggingface-cli login
+  hf download $KONTEXT_REPO
 
 (Or just let it download on first run of flux/kontext_server.py.)
 EOF
@@ -298,15 +309,15 @@ PY
   if [ "$SKIP_WEIGHTS" -eq 0 ]; then
     log "Pre-downloading SAM3 weights ($SAM3_REPO)"
     [ -d "$FLUX_VENV_DIR" ] && source "$FLUX_VENV_DIR/bin/activate"
-    if ! huggingface-cli download "$SAM3_REPO" >/dev/null; then
+    if ! hf_cli download "$SAM3_REPO" >/dev/null; then
       cat >&2 <<EOF
 
 WARNING: download of $SAM3_REPO failed. This model is gated — accept the license at
 https://huggingface.co/$SAM3_REPO and log in, then retry:
 
   source .venv-flux/bin/activate
-  huggingface-cli login
-  huggingface-cli download $SAM3_REPO
+  hf auth login          # older huggingface_hub: huggingface-cli login
+  hf download $SAM3_REPO
 
 (Or just let it download on first inpaint request to flux/kontext_server.py.)
 EOF
