@@ -160,15 +160,14 @@ def model_call(id_image, ref_hair, converter_scale, scale, guidance_scale, contr
 
 
 # ---------------------------------------------------------------------------
-# Methods 2 & 3 both run on the merged FLUX.1-Kontext worker (flux/kontext_server.py
-# in .venv-flux), which loads the model once and serves both over local HTTP.
-#   Method 2 "FLUX Kontext" -> /transfer         (ID + reference concatenated, edited, cropped)
-#   Method 3 "SAM3 + Inpaint" -> /inpaint_transfer (SAM3 hair mask + reference inpaint)
+# Method 2: FLUX.2-dev multi-reference editing, served by flux/flux2_server.py
+# (in .venv-flux), which loads the 4-bit model once and serves it over local HTTP.
+#   "FLUX.2" -> /transfer   (ID + hair reference passed as multi-image; source edited)
 # ---------------------------------------------------------------------------
-KONTEXT_CONFIG = OmegaConf.load("./configs/kontext.yaml")
-KONTEXT_URL = f"http://{KONTEXT_CONFIG.server.host}:{KONTEXT_CONFIG.server.port}"
+FLUX2_CONFIG = OmegaConf.load("./configs/flux2.yaml")
+FLUX2_URL = f"http://{FLUX2_CONFIG.server.host}:{FLUX2_CONFIG.server.port}"
 
-_START_HINT = "Start it first:  .venv-flux python flux/kontext_server.py  (see README)."
+_START_HINT = "Start it first:  .venv-flux/bin/python flux/flux2_server.py  (see README)."
 
 
 def _b64_to_image(b64):
@@ -189,42 +188,26 @@ def _two_image_files(id_image, ref_hair):
     }
 
 
-def _post_kontext(endpoint, files, data):
+def flux2_transfer(id_image, ref_hair, prompt):
+    files = _two_image_files(id_image, ref_hair)
+    data = {"prompt": prompt or FLUX2_CONFIG.edit_prompt}
     try:
-        resp = requests.post(f"{KONTEXT_URL}/{endpoint}", files=files, data=data, timeout=600)
+        resp = requests.post(f"{FLUX2_URL}/transfer", files=files, data=data, timeout=900)
     except requests.exceptions.RequestException:
-        raise gr.Error(f"Could not reach the FLUX.1-Kontext worker at {KONTEXT_URL}. {_START_HINT}")
+        raise gr.Error(f"Could not reach the FLUX.2 worker at {FLUX2_URL}. {_START_HINT}")
     if resp.status_code != 200:
-        # The worker returns a helpful JSON {"error": ...} (e.g. 422 = no mask found).
         try:
             msg = resp.json().get("error", resp.text[:200])
         except Exception:
             msg = resp.text[:200]
-        raise gr.Error(f"Kontext worker error ({resp.status_code}): {msg}")
-    return resp.json()
-
-
-def kontext_transfer(id_image, ref_hair, prompt):
-    files = _two_image_files(id_image, ref_hair)
-    data = {"prompt": prompt or KONTEXT_CONFIG.edit_prompt}
-    payload = _post_kontext("transfer", files, data)
-    return _b64_to_image(payload["result"])
-
-
-def sam_inpaint_transfer(id_image, ref_hair, prompt, mask_prompt):
-    files = _two_image_files(id_image, ref_hair)
-    data = {
-        "prompt": prompt or KONTEXT_CONFIG.inpaint_prompt,
-        "mask_prompt": mask_prompt or KONTEXT_CONFIG.mask_prompt,
-    }
-    payload = _post_kontext("inpaint_transfer", files, data)
-    return _b64_to_image(payload["mask"]), _b64_to_image(payload["result"])
+        raise gr.Error(f"FLUX.2 worker error ({resp.status_code}): {msg}")
+    return _b64_to_image(resp.json()["result"])
 
 
 # ---------------------------------------------------------------------------
 # Dispatch + UI
 # ---------------------------------------------------------------------------
-def run(method, id_image, ref_hair, prompt, mask_prompt,
+def run(method, id_image, ref_hair, prompt,
         converter_scale, scale, guidance_scale, controlnet_conditioning_scale):
     if id_image is None or ref_hair is None:
         raise gr.Error("Please provide both an ID image and a reference hair image.")
@@ -232,46 +215,35 @@ def run(method, id_image, ref_hair, prompt, mask_prompt,
         bald, result = model_call(id_image, ref_hair, converter_scale, scale,
                                   guidance_scale, controlnet_conditioning_scale)
         return bald, result
-    if method == "FLUX Kontext":
-        result = kontext_transfer(id_image, ref_hair, prompt)
-        return None, result
-    # SAM3 + Inpaint: first output is the hair mask, second is the inpainted result.
-    mask, result = sam_inpaint_transfer(id_image, ref_hair, prompt, mask_prompt)
-    return mask, result
+    # FLUX.2 multi-reference edit (no intermediate image).
+    result = flux2_transfer(id_image, ref_hair, prompt)
+    return None, result
 
 
 def _on_method_change(method):
     is_sh = method == "Stable-Hair"
-    is_inpaint = method == "SAM3 + Inpaint"
-    # Prompt box is used by both Kontext methods; sliders only by Stable-Hair;
-    # mask-prompt only by SAM3+Inpaint. The first output shows a bald face for
-    # Stable-Hair and the segmentation mask for SAM3+Inpaint.
-    first_output_label = "Hair mask (SAM3)" if is_inpaint else "Bald_Result"
-    # The prompt default differs between the two Kontext methods.
-    prompt_value = KONTEXT_CONFIG.inpaint_prompt if is_inpaint else KONTEXT_CONFIG.edit_prompt
+    # Prompt box is used by FLUX.2 only; sliders + the bald intermediate are Stable-Hair only.
     return (
-        gr.update(visible=not is_sh, value=prompt_value),  # prompt
-        gr.update(visible=is_inpaint),                     # mask_prompt
-        gr.update(visible=is_sh),                          # stable-hair sliders group
-        gr.update(visible=is_sh or is_inpaint, label=first_output_label),  # first output
+        gr.update(visible=not is_sh, value=FLUX2_CONFIG.edit_prompt),  # prompt
+        gr.update(visible=is_sh),                                     # stable-hair sliders group
+        gr.update(visible=is_sh),                                     # first output (bald)
     )
 
 
 with gr.Blocks(title="Hair Transfer Demo") as iface:
     gr.Markdown(
         "# Hair Transfer Demo\n"
-        "Three methods:\n"
-        "- **Stable-Hair** — two-stage SD1.5 pipeline (tuned via sliders).\n"
-        "- **FLUX Kontext** — prompt-driven; the ID + reference are edited together and the "
-        "result cropped back to the person.\n"
-        "- **SAM3 + Inpaint** — segment the hair with SAM3, then repaint just that region "
-        "with the reference hairstyle.\n\n"
-        "Both Kontext methods share one FLUX.1-Kontext worker (see README). "
-        "Aligned 512×512 faces work best for Stable-Hair."
+        "Two methods:\n"
+        "- **Stable-Hair** — two-stage SD1.5 pipeline (tuned via sliders); aligned 512×512 "
+        "faces work best.\n"
+        "- **FLUX.2** — FLUX.2-dev multi-reference editing: the ID + hair reference are fed "
+        "together and the model gives the person the reference's hairstyle, preserving the "
+        "original framing. Edit the prompt to describe the desired hair for stronger control. "
+        "Served by flux/flux2_server.py (see README)."
     )
     method = gr.Radio(
-        ["Stable-Hair", "FLUX Kontext", "SAM3 + Inpaint"],
-        value="Stable-Hair",
+        ["Stable-Hair", "FLUX.2"],
+        value="FLUX.2",
         label="Method",
     )
 
@@ -280,19 +252,13 @@ with gr.Blocks(title="Hair Transfer Demo") as iface:
         ref_hair = gr.Image(label="Reference hair")
 
     prompt = gr.Textbox(
-        label="Prompt (Kontext methods)",
-        value=KONTEXT_CONFIG.edit_prompt,
-        lines=2,
-        visible=False,
-    )
-    mask_prompt = gr.Textbox(
-        label="Mask prompt (SAM3 — what to segment & repaint)",
-        value=KONTEXT_CONFIG.mask_prompt,
-        lines=1,
-        visible=False,
+        label="Prompt (FLUX.2)",
+        value=FLUX2_CONFIG.edit_prompt,
+        lines=3,
+        visible=True,
     )
 
-    with gr.Group(visible=True) as sh_controls:
+    with gr.Group(visible=False) as sh_controls:
         converter_scale = gr.Slider(minimum=0.5, maximum=1.5, value=1, label="Converter Scale")
         scale = gr.Slider(minimum=0.0, maximum=3, value=1.0, label="Hair Encoder Scale")
         guidance_scale = gr.Slider(minimum=1.1, maximum=3.0, value=1.5, label="CFG")
@@ -301,17 +267,17 @@ with gr.Blocks(title="Hair Transfer Demo") as iface:
     run_btn = gr.Button("Run", variant="primary")
 
     with gr.Row():
-        output_bald = gr.Image(type="pil", label="Bald_Result")
+        output_bald = gr.Image(type="pil", label="Bald_Result", visible=False)
         output_transfer = gr.Image(type="pil", label="Transfer Result")
 
     method.change(
         _on_method_change,
         inputs=method,
-        outputs=[prompt, mask_prompt, sh_controls, output_bald],
+        outputs=[prompt, sh_controls, output_bald],
     )
     run_btn.click(
         run,
-        inputs=[method, id_image, ref_hair, prompt, mask_prompt,
+        inputs=[method, id_image, ref_hair, prompt,
                 converter_scale, scale, guidance_scale, controlnet_conditioning_scale],
         outputs=[output_bald, output_transfer],
     )

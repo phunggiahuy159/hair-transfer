@@ -17,7 +17,7 @@ REPO_DIR="$(pwd)"
 
 VENV_DIR="${REPO_DIR}/.venv"
 FLUX_VENV_DIR="${REPO_DIR}/.venv-flux"
-CFG="configs/kontext.yaml"
+CFG="configs/flux2.yaml"
 
 WITH_FLUX=1
 [ "${1:-}" = "--no-flux" ] && WITH_FLUX=0
@@ -41,11 +41,11 @@ if [ "$WITH_FLUX" -eq 1 ]; then
   else
     HOST="$(read_cfg host)"
     PORT="$(read_cfg port)"
-    echo "==> Starting FLUX.1-Kontext worker on http://${HOST}:${PORT} (loading model — may take a while)"
-    "$FLUX_VENV_DIR/bin/python" flux/kontext_server.py &
+    echo "==> Starting FLUX.2 worker on http://${HOST}:${PORT} (loading 4-bit model — may take a while)"
+    "$FLUX_VENV_DIR/bin/python" flux/flux2_server.py &
     WORKER_PID=$!
 
-    echo "==> Waiting for the Kontext worker to become healthy ..."
+    echo "==> Waiting for the FLUX.2 worker to become healthy ..."
     for _ in $(seq 1 120); do
       if curl -sf "http://${HOST}:${PORT}/health" | grep -q '"ready": *true'; then
         echo "==> Kontext worker ready."

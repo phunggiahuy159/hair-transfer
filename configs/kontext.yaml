@@ -13,13 +13,22 @@ kontext_repo: "black-forest-labs/FLUX.1-Kontext-dev"
 sam3_repo: "facebook/sam3"
 
 # Shared generation defaults.
-size: 512
+# FLUX.1-Kontext is a ~1-megapixel model (its PREFERRED_KONTEXT_RESOLUTIONS are all
+# ~1024x1024 area) and the pipeline internally normalizes conditioning/output to ~1MP.
+# Keep size at 1024: 512 visibly degrades quality (downscaled, blurry crops) for no
+# memory saving — with CPU offload (low_vram) the GPU peak is ~25-28GB either way.
+size: 1024
 num_inference_steps: 28
-guidance_scale: 2.5
+guidance_scale: 4.0          # FLUX.1-Kontext range is ~2.5-4.0; hair transfer is a large
+                             # structural edit, so the higher end is needed — at 2.5 the
+                             # model is too conservative and barely changes the hair.
 low_vram: true               # enable_model_cpu_offload() on the shared pipeline (needed on 40GB cards)
 
 # --- Method 2: prompt-driven edit (ID + reference placed side by side, result cropped) ---
-edit_prompt: "The image shows two people side by side. Give the person on the LEFT the exact hairstyle, hair colour, length and texture of the person on the RIGHT. Keep the LEFT person's face, identity, skin tone and background unchanged, and keep the same side-by-side layout."
+# Tip: describing the TARGET hair explicitly (e.g. "long thick voluminous curly hair")
+# drives a much stronger transfer than just "the right person's hairstyle". The web UI
+# exposes this prompt so users can tailor it per reference.
+edit_prompt: "Completely restyle the hair of the person on the LEFT so it exactly matches the hair of the person on the RIGHT: copy the RIGHT person's hair shape, length, volume, curl/wave pattern, texture and colour, changing the LEFT person's hair as much as needed even if it is very different. Keep the LEFT person's face, expression, skin tone and clothing identical, leave the RIGHT person unchanged, and keep the side-by-side layout."
 
 # --- Method 3: SAM3 hair mask + FLUX.1-Kontext reference inpainting ---
 mask_prompt: "hair"

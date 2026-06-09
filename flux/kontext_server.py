@@ -28,7 +28,7 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
-from PIL import Image
+from PIL import Image, ImageOps
 
 # Repo root is the parent of this file's directory (flux/).
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -119,7 +119,21 @@ def health():
 
 
 def _read_image(upload_bytes, size):
+    # Square resize — used by Method 3 (inpaint works on a single image + its mask).
     return Image.open(io.BytesIO(upload_bytes)).convert("RGB").resize((size, size))
+
+
+def _load_image(upload_bytes):
+    return Image.open(io.BytesIO(upload_bytes)).convert("RGB")
+
+
+def _square(img, size):
+    """Center-crop to a `size`x`size` square WITHOUT distorting aspect ratio
+    (ImageOps.fit crops the long side instead of squishing). Keeping both panels
+    square gives a 2:1 side-by-side canvas, which is close to FLUX.1-Kontext's
+    trained ~1MP buckets — wide canvases (e.g. 2.5:1 from raw 16:9 + portrait
+    inputs) fall outside its range and the edit barely applies."""
+    return ImageOps.fit(img, (size, size), method=Image.LANCZOS)
 
 
 def _png_b64(img):
@@ -152,13 +166,17 @@ async def transfer(
     guidance_scale = float(guidance_scale if guidance_scale is not None else CONFIG["guidance_scale"])
     size = int(size or CONFIG["size"])
 
-    source = _read_image(await image1.read(), size)
-    reference = _read_image(await image2.read(), size)
+    source = _load_image(await image1.read())
+    reference = _load_image(await image2.read())
 
-    # Concatenate side by side: ID on the left, reference on the right.
+    # Concatenate side by side: ID on the LEFT, reference on the RIGHT. Each panel is a
+    # center-cropped square (no aspect distortion), giving a clean 2:1 canvas and an exact
+    # 50% split so the left (source) half can be cropped back reliably.
+    src = _square(source, size)
+    ref = _square(reference, size)
     canvas = Image.new("RGB", (2 * size, size))
-    canvas.paste(source, (0, 0))
-    canvas.paste(reference, (size, 0))
+    canvas.paste(src, (0, 0))
+    canvas.paste(ref, (size, 0))
 
     out = EDIT_PIPE(
         image=canvas,
@@ -168,7 +186,8 @@ async def transfer(
         generator=_make_generator(seed),
     ).images[0]
 
-    # Kontext may return a preferred-bucket size; normalize, then crop the LEFT (ID) half.
+    # Kontext returns a preferred-bucket size; normalize back to the canvas, then crop the
+    # LEFT (source) square.
     out = out.resize((2 * size, size))
     result = out.crop((0, 0, size, size))
     return JSONResponse({"result": _png_b64(result)})

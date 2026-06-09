@@ -1,0 +1,24 @@
+# Configuration for the FLUX.2-dev multi-reference hair-transfer worker
+# (flux/flux2_server.py, run in .venv-flux). Replaces the FLUX.1-Kontext "/transfer".
+#
+# FLUX.2-dev supports native multi-reference editing: the source (ID) image and the hair
+# reference are passed together and the model edits the source to adopt the reference's
+# hairstyle — no side-by-side canvas / crop, and the source framing is preserved.
+#
+# The 4-bit (bitsandbytes NF4) build is used because A100/Ampere has no FP8 tensor cores;
+# 4-bit both fits a 40GB card (~30GB peak with CPU offload) and runs accelerated.
+
+flux2_repo: "diffusers/FLUX.2-dev-bnb-4bit"
+
+num_inference_steps: 28
+guidance_scale: 4.0
+low_vram: true               # enable_model_cpu_offload() (needed on a single 40GB card)
+
+# Multi-reference instruction. image[0] = source/ID (kept), image[1] = hair reference.
+# Tip: the UI exposes this prompt; you can describe the desired hair explicitly for even
+# stronger control (e.g. "long thick voluminous curly hair").
+edit_prompt: "The first image is a photo of a person. The second image shows someone with a particular hairstyle. Edit the first image so the person has exactly that hairstyle from the second image — match its shape, length, volume, curl/wave pattern, texture and colour. Keep the person's face, identity, expression, skin tone, clothing and background unchanged. Output only the edited first image."
+
+server:
+  host: "127.0.0.1"
+  port: 8987
