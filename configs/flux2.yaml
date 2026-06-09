@@ -10,8 +10,16 @@
 
 flux2_repo: "diffusers/FLUX.2-dev-bnb-4bit"
 
-num_inference_steps: 28
-guidance_scale: 4.0
+# Turbo distillation LoRA (fal): runs FLUX.2-dev in 8 steps (vs ~28) at comparable
+# quality. It requires its specific sigma schedule + guidance 2.5. Comment out
+# turbo_lora_repo (and set num_inference_steps back up, e.g. 28) to use the plain
+# dev model instead.
+turbo_lora_repo: "fal/FLUX.2-dev-Turbo"
+turbo_lora_file: "flux.2-turbo-lora.safetensors"
+turbo_sigmas: [1.0, 0.6509, 0.4374, 0.2932, 0.1893, 0.1108, 0.0495, 0.00031]
+
+num_inference_steps: 8
+guidance_scale: 2.5
 low_vram: true               # enable_model_cpu_offload() (needed on a single 40GB card)
 
 # Multi-reference instruction. image[0] = source/ID (kept), image[1] = hair reference.

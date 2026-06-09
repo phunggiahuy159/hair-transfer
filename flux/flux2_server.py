@@ -51,9 +51,18 @@ def _startup():
     repo = CONFIG["flux2_repo"]
     print(f"[flux2] loading {repo} (4-bit) ...", flush=True)
     pipe = Flux2Pipeline.from_pretrained(repo, torch_dtype=torch.bfloat16)
+
+    # Turbo distillation LoRA (DMD2): runs the dev model in ~8 steps instead of ~28 at
+    # comparable quality. Stacked on the 4-bit base via PEFT (not fused — fusing into a
+    # bnb-4bit base isn't supported, but unfused inference works fine).
+    lora_repo = CONFIG.get("turbo_lora_repo")
+    if lora_repo:
+        print(f"[flux2] loading Turbo LoRA {lora_repo} ...", flush=True)
+        pipe.load_lora_weights(lora_repo, weight_name=CONFIG.get("turbo_lora_file"))
+
     if CONFIG.get("low_vram", True):
-        # Keep only the active module on the GPU (peak ~30GB instead of ~34GB resident);
-        # needed so the 32B model + activations fit a single 40GB card.
+        # Keep only the active module on the GPU; needed so the 32B model + LoRA +
+        # activations fit a single 40GB card (peak ~36GB with the Turbo LoRA).
         pipe.enable_model_cpu_offload()
     else:
         pipe.to(DEVICE)
@@ -98,6 +107,14 @@ async def transfer(
     steps = int(steps or CONFIG["num_inference_steps"])
     guidance_scale = float(guidance_scale if guidance_scale is not None else CONFIG["guidance_scale"])
 
+    # The Turbo LoRA needs its specific noise schedule; when configured, the sigmas drive
+    # the step count (ignore any client step override to keep the distilled schedule intact).
+    extra = {}
+    sigmas = CONFIG.get("turbo_sigmas")
+    if sigmas:
+        extra["sigmas"] = [float(s) for s in sigmas]
+        steps = len(sigmas)
+
     source = _load_image(await image1.read())
     reference = _load_image(await image2.read())
 
@@ -109,6 +126,7 @@ async def transfer(
         num_inference_steps=steps,
         guidance_scale=guidance_scale,
         generator=_make_generator(seed),
+        **extra,
     ).images[0]
 
     return JSONResponse({"result": _png_b64(out)})
