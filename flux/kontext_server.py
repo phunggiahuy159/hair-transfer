@@ -65,15 +65,25 @@ def _startup():
     print(f"[kontext] loading {repo} ...")
     edit = FluxKontextPipeline.from_pretrained(repo, torch_dtype=torch.bfloat16)
     if CONFIG.get("low_vram", False):
+        # On memory-constrained GPUs (e.g. a single 40GB card), enable_model_cpu_offload
+        # keeps only the active module on the GPU (peak ~25GB instead of ~38GB resident).
+        # IMPORTANT: sharing components via from_pipe() severs the offload eviction chain
+        # — modules load onto the GPU during a run but are never offloaded back, so memory
+        # accumulates to the full model size and OOMs. Under low_vram we therefore load an
+        # independent inpaint pipeline (weights are cached on disk; CPU RAM holds both) and
+        # offload each separately so both methods keep a working offload chain.
         edit.enable_model_cpu_offload()
+        inpaint = FluxKontextInpaintPipeline.from_pretrained(repo, torch_dtype=torch.bfloat16)
+        inpaint.enable_model_cpu_offload()
+        print("[kontext] model ready (edit + inpaint, CPU offload).")
     else:
         edit.to(DEVICE)
-    # Reuse the same transformer / VAE / text encoders — no extra weights loaded.
-    inpaint = FluxKontextInpaintPipeline.from_pipe(edit)
+        # Reuse the same transformer / VAE / text encoders — no extra weights loaded.
+        inpaint = FluxKontextInpaintPipeline.from_pipe(edit)
+        print("[kontext] model ready (edit + inpaint share weights).")
 
     EDIT_PIPE = edit
     INPAINT_PIPE = inpaint
-    print("[kontext] model ready (edit + inpaint share weights).")
 
 
 def _get_sam():

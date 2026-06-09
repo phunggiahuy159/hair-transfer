@@ -13,10 +13,10 @@ kontext_repo: "black-forest-labs/FLUX.1-Kontext-dev"
 sam3_repo: "facebook/sam3"
 
 # Shared generation defaults.
-size: 1024
+size: 512
 num_inference_steps: 28
 guidance_scale: 2.5
-low_vram: false              # enable_model_cpu_offload() on the shared pipeline
+low_vram: true               # enable_model_cpu_offload() on the shared pipeline (needed on 40GB cards)
 
 # --- Method 2: prompt-driven edit (ID + reference placed side by side, result cropped) ---
 edit_prompt: "The image shows two people side by side. Give the person on the LEFT the exact hairstyle, hair colour, length and texture of the person on the RIGHT. Keep the LEFT person's face, identity, skin tone and background unchanged, and keep the same side-by-side layout."
