@@ -6,6 +6,7 @@ from PIL import Image
 from omegaconf import OmegaConf
 import os
 import io
+import gc
 import base64
 import cv2
 import requests
@@ -135,6 +136,20 @@ def get_stable_hair():
     return _stable_hair_model
 
 
+def unload_stable_hair():
+    """Release Stable-Hair (~17GB fp32) from the GPU. Method 2's FLUX.2 worker is a
+    separate process that needs most of the 40GB card, so the two models can't be resident
+    at once — drop Stable-Hair before a FLUX.2 run (it lazily reloads on the next
+    Stable-Hair run). The FLUX.2 worker offloads itself to CPU when idle, so Method 1 runs
+    fine alongside it; only FLUX.2-with-Stable-Hair-resident would OOM."""
+    global _stable_hair_model
+    if _stable_hair_model is not None:
+        _stable_hair_model = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
 def model_call(id_image, ref_hair, converter_scale, scale, guidance_scale, controlnet_conditioning_scale):
     model = get_stable_hair()
     id_image = Image.fromarray(id_image.astype('uint8'), 'RGB')
@@ -215,7 +230,9 @@ def run(method, id_image, ref_hair, prompt,
         bald, result = model_call(id_image, ref_hair, converter_scale, scale,
                                   guidance_scale, controlnet_conditioning_scale)
         return bald, result
-    # FLUX.2 multi-reference edit (no intermediate image).
+    # FLUX.2 multi-reference edit (no intermediate image). Free Stable-Hair from the GPU
+    # first so the FLUX.2 worker (separate process) has the full card.
+    unload_stable_hair()
     result = flux2_transfer(id_image, ref_hair, prompt)
     return None, result
 
@@ -282,5 +299,11 @@ with gr.Blocks(title="Hair Transfer Demo") as iface:
         outputs=[output_bald, output_transfer],
     )
 
-# Launch the Gradio interface
-iface.queue().launch(server_name='0.0.0.0', server_port=8986)
+# Launch the Gradio interface.
+# Set GRADIO_SHARE=1 to also expose a temporary public https://*.gradio.live link
+# (handy for remote testing; the link is public for ~72h — anyone with it can use the GPU).
+iface.queue().launch(
+    server_name='0.0.0.0',
+    server_port=8986,
+    share=os.environ.get('GRADIO_SHARE', '0') == '1',
+)
